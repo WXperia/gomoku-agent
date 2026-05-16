@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { useSupabase } from '~/composables/useSupabase'
 
 export interface User {
   id: string
@@ -110,48 +111,85 @@ export const useGameStore = defineStore('game', {
   },
 
   actions: {
-    // User management
-    setUser(userData: Omit<User, 'id' | 'totalMoves' | 'gamesPlayed' | 'wins' | 'createdAt'>) {
+    // ── User management ───────────────────────────────────────────────────────
+
+    async setUser(userData: Omit<User, 'id' | 'totalMoves' | 'gamesPlayed' | 'wins' | 'createdAt'>) {
       const user: User = {
         ...userData,
         id: crypto.randomUUID(),
         totalMoves: 0,
         gamesPlayed: 0,
         wins: 0,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
       }
       this.currentUser = user
-      // Persist current user
       if (typeof window !== 'undefined') {
         localStorage.setItem('gomoku_current_user', JSON.stringify(user))
       }
-      this.loadUsers()
-      if (!this.users.find(u => u.id === user.id)) {
-        this.users.push(user)
-        this.saveUsers()
+
+      // Persist to Supabase
+      try {
+        const sb = useSupabase()
+        await sb.from('users').insert({
+          id: user.id,
+          nickname: user.nickname,
+          email: user.email || null,
+          country: user.country,
+          country_code: user.countryCode,
+          flag: user.flag,
+          total_moves: 0,
+          games_played: 0,
+          wins: 0,
+          created_at: user.createdAt,
+        })
+      } catch (e) {
+        console.warn('Supabase insert user failed:', e)
       }
+
+      await this.loadUsers()
     },
 
-    loadUsers() {
+    async loadUsers() {
       if (typeof window === 'undefined') return
-      const stored = localStorage.getItem('gomoku_users')
-      if (stored) {
-        try {
-          this.users = JSON.parse(stored)
-        } catch {
-          this.users = []
-        }
-      }
+
       // Restore current user from localStorage
       if (!this.currentUser) {
         const storedUser = localStorage.getItem('gomoku_current_user')
         if (storedUser) {
-          try {
-            this.currentUser = JSON.parse(storedUser)
-          } catch {
-            this.currentUser = null
-          }
+          try { this.currentUser = JSON.parse(storedUser) } catch {}
         }
+      }
+
+      // Load leaderboard from Supabase
+      try {
+        const sb = useSupabase()
+        const { data, error } = await sb
+          .from('users')
+          .select('id,nickname,country,country_code,flag,total_moves,games_played,wins,created_at')
+          .order('total_moves', { ascending: false })
+          .limit(100)
+        if (!error && data) {
+          this.users = data.map(r => ({
+            id: r.id,
+            nickname: r.nickname,
+            country: r.country,
+            countryCode: r.country_code,
+            flag: r.flag,
+            totalMoves: r.total_moves,
+            gamesPlayed: r.games_played,
+            wins: r.wins,
+            createdAt: r.created_at,
+          }))
+          return
+        }
+      } catch (e) {
+        console.warn('Supabase loadUsers failed, using localStorage:', e)
+      }
+
+      // Fallback to localStorage
+      const stored = localStorage.getItem('gomoku_users')
+      if (stored) {
+        try { this.users = JSON.parse(stored) } catch {}
       }
     },
 
@@ -160,8 +198,34 @@ export const useGameStore = defineStore('game', {
       localStorage.setItem('gomoku_users', JSON.stringify(this.users))
     },
 
-    loadAIStats() {
+    async loadAIStats() {
       if (typeof window === 'undefined') return
+
+      // Restore selected model
+      if (!this.selectedModel) {
+        const storedModelId = localStorage.getItem('gomoku_selected_model')
+        if (storedModelId) {
+          const found = this.aiModels.find(m => m.id === storedModelId)
+          if (found) this.selectedModel = found
+        }
+      }
+
+      // Load AI stats from Supabase
+      try {
+        const sb = useSupabase()
+        const { data, error } = await sb.from('ai_stats').select('model_id,wins,games')
+        if (!error && data) {
+          this.aiModels.forEach(model => {
+            const row = data.find(r => r.model_id === model.id)
+            if (row) { model.wins = row.wins; model.games = row.games }
+          })
+          return
+        }
+      } catch (e) {
+        console.warn('Supabase loadAIStats failed, using localStorage:', e)
+      }
+
+      // Fallback to localStorage
       const stored = localStorage.getItem('gomoku_ai_stats')
       if (stored) {
         try {
@@ -172,30 +236,19 @@ export const useGameStore = defineStore('game', {
               model.games = stats[model.id].games || 0
             }
           })
-        } catch {
-          // ignore
-        }
-      }
-      // Restore selected model
-      if (!this.selectedModel) {
-        const storedModelId = localStorage.getItem('gomoku_selected_model')
-        if (storedModelId) {
-          const found = this.aiModels.find(m => m.id === storedModelId)
-          if (found) this.selectedModel = found
-        }
+        } catch {}
       }
     },
 
     saveAIStats() {
       if (typeof window === 'undefined') return
-      const stats: Record<string, {wins: number, games: number}> = {}
-      this.aiModels.forEach(model => {
-        stats[model.id] = { wins: model.wins, games: model.games }
-      })
+      const stats: Record<string, { wins: number; games: number }> = {}
+      this.aiModels.forEach(model => { stats[model.id] = { wins: model.wins, games: model.games } })
       localStorage.setItem('gomoku_ai_stats', JSON.stringify(stats))
     },
 
-    // Game management
+    // ── Game management ───────────────────────────────────────────────────────
+
     selectModel(model: AIModel) {
       this.selectedModel = model
       if (typeof window !== 'undefined') {
@@ -216,7 +269,7 @@ export const useGameStore = defineStore('game', {
       this.aiThinkingHistory = []
     },
 
-    placeStone(x: number, y: number): boolean {
+    async placeStone(x: number, y: number): Promise<boolean> {
       if (this.gameStatus !== 'playing') return false
       if (this.board[y][x] !== 0) return false
       if (this.currentPlayer !== 1) return false // Human must be player 1
@@ -230,14 +283,14 @@ export const useGameStore = defineStore('game', {
         this.gameStatus = 'won'
         this.winner = 1
         this.winLine = winResult
-        this.endGame(true)
+        await this.endGame(true)
         return true
       }
 
       // Check draw
       if (this.moves.length >= 225) {
         this.gameStatus = 'draw'
-        this.endGame(false)
+        await this.endGame(false)
         return true
       }
 
@@ -276,7 +329,7 @@ export const useGameStore = defineStore('game', {
           this.gameStatus = 'lost'
           this.winner = 2
           this.winLine = winResult
-          this.endGame(false)
+          await this.endGame(false)
           return
         }
 
@@ -284,7 +337,7 @@ export const useGameStore = defineStore('game', {
 
         if (this.moves.length >= 225) {
           this.gameStatus = 'draw'
-          this.endGame(false)
+          await this.endGame(false)
         }
       }
     },
@@ -517,22 +570,65 @@ export const useGameStore = defineStore('game', {
       return null
     },
 
-    endGame(playerWon: boolean) {
+    async endGame(playerWon: boolean) {
+      const result: 'won' | 'lost' | 'draw' =
+        this.gameStatus === 'draw' ? 'draw' : playerWon ? 'won' : 'lost'
+
       if (this.currentUser) {
         this.currentUser.totalMoves += this.moves.length
         this.currentUser.gamesPlayed++
-        if (playerWon) {
-          this.currentUser.wins++
+        if (playerWon) this.currentUser.wins++
+
+        // Persist user stats to Supabase
+        try {
+          const sb = useSupabase()
+          await sb.from('users').update({
+            total_moves: this.currentUser.totalMoves,
+            games_played: this.currentUser.gamesPlayed,
+            wins: this.currentUser.wins,
+          }).eq('id', this.currentUser.id)
+        } catch (e) {
+          console.warn('Supabase update user stats failed:', e)
         }
+
+        // Fallback local save
         this.saveUsers()
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('gomoku_current_user', JSON.stringify(this.currentUser))
+        }
       }
 
       if (this.selectedModel) {
         this.selectedModel.games++
-        if (!playerWon) {
-          this.selectedModel.wins++
+        if (!playerWon) this.selectedModel.wins++
+
+        // Persist AI stats to Supabase
+        try {
+          const sb = useSupabase()
+          await sb.from('ai_stats').update({
+            wins: this.selectedModel.wins,
+            games: this.selectedModel.games,
+          }).eq('model_id', this.selectedModel.id)
+        } catch (e) {
+          console.warn('Supabase update ai_stats failed:', e)
         }
+
         this.saveAIStats()
+      }
+
+      // Write game record
+      if (this.currentUser && this.selectedModel) {
+        try {
+          const sb = useSupabase()
+          await sb.from('games').insert({
+            user_id: this.currentUser.id,
+            model_id: this.selectedModel.id,
+            result,
+            move_count: this.moves.length,
+          })
+        } catch (e) {
+          console.warn('Supabase insert game failed:', e)
+        }
       }
     },
 
@@ -540,7 +636,7 @@ export const useGameStore = defineStore('game', {
       if (this.gameStatus !== 'playing') return
       this.gameStatus = 'lost'
       this.winner = 2
-      this.endGame(false)
+      this.endGame(false)   // fire-and-forget ok here
     },
 
     resetGame() {

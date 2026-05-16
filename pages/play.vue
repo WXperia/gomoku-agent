@@ -232,9 +232,9 @@ onMounted(() => {
   if (gameStore.gameStatus === 'idle') gameStore.startGame()
 })
 
-function handleCellClick(x: number, y: number) {
+async function handleCellClick(x: number, y: number) {
   if (gameStore.aiMovePending) return
-  const placed = gameStore.placeStone(x, y)
+  const placed = await gameStore.placeStone(x, y)
   if (placed && gameStore.gameStatus === 'playing') {
     gameStore.aiMove()
   }

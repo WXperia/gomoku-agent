@@ -13,7 +13,10 @@ export default defineNuxtConfig({
     deepseekBaseUrl: process.env.DEEPSEEK_BASE_URL || '',
     minimaxApiKey: process.env.MINIMAX_API_KEY || '',
     minimaxBaseUrl: process.env.MINIMAX_BASE_URL || '',
-    public: {},
+    public: {
+      supabaseUrl: process.env.SUPABASE_URL || '',
+      supabasePublishableKey: process.env.SUPABASE_PUBLISHABLE_KEY || '',
+    },
   },
 
   vite: {
