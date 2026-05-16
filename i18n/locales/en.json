@@ -1,0 +1,80 @@
+{
+  "site": {
+    "title": "Gomoku AI Battle",
+    "subtitle": "Challenge the AI, prove your strategy"
+  },
+  "lang": {
+    "switch": "中文",
+    "current": "EN"
+  },
+  "entry": {
+    "nickname": "Nickname",
+    "nickname_placeholder": "Enter your nickname",
+    "email": "Email",
+    "email_optional": "(optional)",
+    "email_placeholder": "your{'@'}email.com",
+    "location": "Location",
+    "detecting": "Detecting...",
+    "start_game": "Start Game",
+    "welcome": "Welcome, {nickname}!",
+    "journey": "Your journey begins now",
+    "feature_choose": "Choose your AI opponent",
+    "feature_compete": "Compete for rankings",
+    "feature_global": "Global leaderboard",
+    "err_required": "Nickname is required",
+    "err_min": "Nickname must be at least 3 characters",
+    "err_chars": "Only letters, numbers and underscore allowed",
+    "err_email": "Invalid email format"
+  },
+  "select": {
+    "title": "Choose Your Opponent",
+    "wins": "Wins",
+    "games": "Games",
+    "view_rankings": "View Rankings",
+    "start_battle": "Start Battle",
+    "cancel": "Cancel"
+  },
+  "play": {
+    "your_turn": "Your Turn",
+    "ai_thinking": "AI Thinking...",
+    "victory": "Victory!",
+    "defeat": "Defeat",
+    "draw": "Draw",
+    "match_info": "Match Info",
+    "opponent": "Opponent",
+    "difficulty": "Difficulty",
+    "moves": "Moves",
+    "your_color": "Your Color",
+    "move_history": "Move History",
+    "no_moves": "No moves yet",
+    "surrender": "Surrender",
+    "play_again": "Play Again",
+    "change_ai": "Change AI",
+    "confirm_surrender": "Are you sure you want to surrender?",
+    "confirm_exit": "Game in progress. Are you sure you want to leave?",
+    "result_win": "You have proven your strategic mastery!",
+    "result_lose": "The AI has outmaneuvered you. Try again!",
+    "result_draw": "An evenly matched game.",
+    "total_moves": "Total Moves",
+    "your_moves": "Your Moves"
+  },
+  "ranking": {
+    "title": "Rankings",
+    "human_tab": "Human Players",
+    "ai_tab": "AI Models",
+    "rank": "Rank",
+    "country": "Country",
+    "player": "Player",
+    "total_moves": "Total Moves",
+    "games": "Games",
+    "win_rate": "Win%",
+    "ai_model": "AI Model",
+    "provider": "Provider",
+    "wins": "Wins",
+    "you": "You",
+    "selected": "Selected",
+    "no_players": "No players yet. Be the first!",
+    "no_ai": "No AI data yet.",
+    "play_now": "Play Now"
+  }
+}

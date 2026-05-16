@@ -1,0 +1,31 @@
+# Environment variables — NEVER commit these
+.env
+.env.*
+!.env.example
+
+# Nuxt build output
+.nuxt/
+.output/
+dist/
+
+# Node
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# TypeScript cache
+*.tsbuildinfo
