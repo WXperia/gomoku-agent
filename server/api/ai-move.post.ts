@@ -49,7 +49,7 @@ export default defineEventHandler(async (event) => {
     apiKey,
     baseUrl,
     modelName,
-    temperature: 0.1,
+    ...(provider === 'anthropic' ? {} : { temperature: 0.1 }),
   }
 
   try {

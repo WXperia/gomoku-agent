@@ -73,7 +73,7 @@ export function createLLM(config: AIConfig) {
       model: config.modelName || 'claude-opus-4-7',
       apiKey: config.apiKey,
       anthropicApiUrl: config.baseUrl,
-      temperature: config.temperature ?? 0.1,
+      ...(config.temperature == null ? {} : { temperature: config.temperature }),
       createClient: (options: Record<string, unknown>) => {
         return new Anthropic({
           ...options,
