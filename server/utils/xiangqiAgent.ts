@@ -29,7 +29,7 @@ const PIECE_LABELS: Record<string, string> = {
 
 const SYSTEM_PROMPT = `You are a strong Chinese Xiangqi (Chinese chess) player. You play Black. The human plays Red.
 
-Choose the best move from the legal move list provided by the rules engine. Do not invent a move. Do not use coordinates outside the legal move list.
+Choose exactly one move from the numbered legal move list. Do not invent coordinates. Do not output anything except JSON.
 
 Strategic priorities:
 1. If you can win or capture the Red general safely, do it.
@@ -38,7 +38,7 @@ Strategic priorities:
 4. Avoid pointless early material grabs if they lose initiative or expose your general.
 
 Respond with ONLY JSON:
-{"fromX":0,"fromY":0,"toX":0,"toY":0,"reasoning":"short strategic reason","confidence":"high|medium|low","taunt":"short optional taunt"}`
+{"moveIndex":1,"reasoning":"short strategic reason","confidence":"high|medium|low","taunt":"short optional taunt"}`
 
 function languageInstruction(language: UserLanguage) {
   return language === 'zh'
@@ -79,21 +79,34 @@ function legalMovesToText(board: (XiangqiPiece | null)[][], legalMoves: XiangqiM
     const piece = board[move.fromY]?.[move.fromX]
     const target = board[move.toY]?.[move.toX]
     const capture = target ? ` captures ${PIECE_LABELS[target] ?? target}` : ''
-    return `${index + 1}. ${PIECE_LABELS[piece ?? ''] ?? piece} ${coord(move.fromX, move.fromY)} -> ${coord(move.toX, move.toY)}${capture} JSON={"fromX":${move.fromX},"fromY":${move.fromY},"toX":${move.toX},"toY":${move.toY}}`
+    return `${index + 1}. ${PIECE_LABELS[piece ?? ''] ?? piece} ${coord(move.fromX, move.fromY)} -> ${coord(move.toX, move.toY)}${capture} JSON={"moveIndex":${index + 1}}`
   }).join('\n')
 }
 
-function parseResponse(raw: string, legalMoves: XiangqiMove[], language: UserLanguage) {
+function extractJson(raw: string) {
   const jsonMatch = raw.match(/\{[\s\S]*?\}/)
   if (!jsonMatch) throw new Error(`No JSON found in response: ${raw.slice(0, 120)}`)
-  const parsed = JSON.parse(jsonMatch[0])
-  const fromX = Number(parsed.fromX)
-  const fromY = Number(parsed.fromY)
-  const toX = Number(parsed.toX)
-  const toY = Number(parsed.toY)
+  return JSON.parse(jsonMatch[0])
+}
 
-  const legal = legalMoves.find(m => m.fromX === fromX && m.fromY === fromY && m.toX === toX && m.toY === toY)
-  if (!legal) throw new Error(`Model chose an illegal move: (${fromX},${fromY})->(${toX},${toY})`)
+function parseResponse(raw: string, legalMoves: XiangqiMove[], language: UserLanguage) {
+  const parsed = extractJson(raw)
+  const moveIndex = Number(parsed.moveIndex)
+  let legal: XiangqiMove | undefined
+
+  if (Number.isInteger(moveIndex) && moveIndex >= 1 && moveIndex <= legalMoves.length) {
+    legal = legalMoves[moveIndex - 1]
+  }
+
+  if (!legal) {
+    const fromX = Number(parsed.fromX)
+    const fromY = Number(parsed.fromY)
+    const toX = Number(parsed.toX)
+    const toY = Number(parsed.toY)
+    legal = legalMoves.find(m => m.fromX === fromX && m.fromY === fromY && m.toX === toX && m.toY === toY)
+  }
+
+  if (!legal) throw new Error(`Model chose an illegal move index: ${parsed.moveIndex}`)
 
   const confidence = (['high', 'medium', 'low'] as const).includes(parsed.confidence)
     ? parsed.confidence as 'high' | 'medium' | 'low'
@@ -104,6 +117,29 @@ function parseResponse(raw: string, legalMoves: XiangqiMove[], language: UserLan
     reasoning: String(parsed.reasoning ?? ''),
     taunt: normalizeTaunt(String(parsed.taunt ?? ''), language),
     confidence,
+  }
+}
+
+function fallbackMove(board: (XiangqiPiece | null)[][], legalMoves: XiangqiMove[], language: UserLanguage): XiangqiAgentOutput {
+  const scored = legalMoves.map((move, index) => {
+    const piece = board[move.fromY]?.[move.fromX]
+    const target = board[move.toY]?.[move.toX]
+    let score = 0
+    if (target === 'rK') score += 10000
+    if (target) score += 100
+    if (piece === 'bR') score += 8
+    if (piece === 'bC') score += 6
+    score += Math.max(0, 4 - Math.abs(move.toX - 4))
+    return { move, index, score }
+  }).sort((a, b) => b.score - a.score)
+
+  const picked = scored[0] ?? { move: legalMoves[0]!, index: 0, score: 0 }
+  return {
+    move: picked.move,
+    reasoning: `Rules-engine fallback selected legal move #${picked.index + 1}.`,
+    taunt: fallbackTaunt(language),
+    confidence: 'low',
+    thinkingSteps: [`[Fallback] Model did not return a valid moveIndex; using legal move #${picked.index + 1}.`],
   }
 }
 
@@ -135,13 +171,13 @@ ${languageInstruction(language)}
 Legal Black moves:
 ${legalMovesToText(input.board, input.legalMoves)}
 
-Pick the best legal Black move.`
+Pick the best legal Black move by moveIndex.`
 
   let lastError = ''
   for (let attempt = 1; attempt <= 2; attempt++) {
     const response = await llm.invoke([
       new SystemMessage(SYSTEM_PROMPT),
-      new HumanMessage(lastError ? `${prompt}\n\nPrevious response error: ${lastError}. Choose only from the legal move list.` : prompt),
+      new HumanMessage(lastError ? `${prompt}\n\nPrevious response error: ${lastError}. Choose only a valid moveIndex from the list.` : prompt),
     ])
     const raw = typeof response.content === 'string'
       ? response.content
@@ -150,17 +186,18 @@ Pick the best legal Black move.`
     try {
       const parsed = parseResponse(raw, input.legalMoves, language)
       thinkingSteps.push(`[Model attempt ${attempt}] ${coord(parsed.move.fromX, parsed.move.fromY)} -> ${coord(parsed.move.toX, parsed.move.toY)}: ${parsed.reasoning.slice(0, 100)}`)
-      return {
-        ...parsed,
-        thinkingSteps,
-      }
+      return { ...parsed, thinkingSteps }
     } catch (err: any) {
       lastError = err?.message || String(err)
       thinkingSteps.push(`[Model attempt ${attempt}] Invalid: ${lastError.slice(0, 140)}`)
     }
   }
 
-  throw new Error('Xiangqi agent failed to choose a legal move')
+  const fallback = fallbackMove(input.board, input.legalMoves, language)
+  return {
+    ...fallback,
+    thinkingSteps: [...thinkingSteps, ...fallback.thinkingSteps],
+  }
 }
 
 export async function streamXiangqiAgent(
