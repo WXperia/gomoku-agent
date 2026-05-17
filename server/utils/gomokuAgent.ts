@@ -17,6 +17,7 @@ import {
 } from './gomokuBoard'
 
 export type ModelProvider = 'openai' | 'anthropic' | 'deepseek' | 'minimax'
+export type UserLanguage = 'zh' | 'en'
 
 export interface AIConfig {
   provider: ModelProvider
@@ -30,6 +31,7 @@ export interface AgentInput {
   board: Board
   moves: Move[]
   config: AIConfig
+  language?: UserLanguage
 }
 
 export interface AgentOutput {
@@ -54,6 +56,7 @@ const AgentState = Annotation.Root({
   confidence: Annotation<'high' | 'medium' | 'low'>({ default: () => 'medium', reducer: (_, v) => v }),
   thinkingSteps: Annotation<string[]>({ default: () => [], reducer: (a, v) => [...a, ...v] }),
   llm: Annotation<ReturnType<typeof createLLM>>(),
+  language: Annotation<UserLanguage>({ default: () => 'zh', reducer: (_, v) => v }),
 })
 
 type AgentStateType = typeof AgentState.State
@@ -129,6 +132,36 @@ You MUST respond with ONLY a JSON object, no other text:
 
 Example: {"x": 7, "y": 7, "reasoning": "Center control in the opening", "confidence": "high", "taunt": "Starting from the center — the only logical move. Did you expect anything less?"}`
 
+function languageInstruction(language: UserLanguage) {
+  return language === 'zh'
+    ? 'The user interface language is Simplified Chinese. The "taunt" field MUST be Simplified Chinese.'
+    : 'The user interface language is English. The "taunt" field MUST be English.'
+}
+
+function hasCjk(text: string) {
+  return /[\u3400-\u9fff]/.test(text)
+}
+
+function fallbackTaunt(language: UserLanguage, kind: 'win' | 'block' | 'tactic' | 'model' = 'model') {
+  if (language === 'zh') {
+    if (kind === 'win') return '这一步已经够收棋了，别说我没提醒你。'
+    if (kind === 'block') return '想偷赢？我看见了，也顺手堵上了。'
+    if (kind === 'tactic') return '这个位置自己都会赢，我只是负责落子。'
+    return '你的局面越来越窄了。'
+  }
+  if (kind === 'win') return 'That is the finishing touch. Try to look surprised.'
+  if (kind === 'block') return 'Nice try. I saw it, and I shut it down.'
+  if (kind === 'tactic') return 'This position is already doing the hard work for me.'
+  return 'Your position is getting smaller by the move.'
+}
+
+function normalizeTaunt(taunt: string, language: UserLanguage, kind: 'win' | 'block' | 'tactic' | 'model' = 'model') {
+  const trimmed = taunt.trim()
+  if (!trimmed) return fallbackTaunt(language, kind)
+  if (language === 'zh') return hasCjk(trimmed) ? trimmed : fallbackTaunt(language, kind)
+  return hasCjk(trimmed) ? fallbackTaunt(language, kind) : trimmed
+}
+
 // ── Node 1: Pre-computation (forced moves, board analysis) ────────────────────
 
 async function precomputeNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
@@ -171,7 +204,7 @@ async function precomputeNode(state: AgentStateType): Promise<Partial<AgentState
 
 // ── Node 2: Let the model freely choose its move (up to 2 attempts) ──────────
 
-function buildPrompt(analysis: BoardAnalysis, moves: Move[], board: Board, prevError?: string): string {
+function buildPrompt(analysis: BoardAnalysis, moves: Move[], board: Board, language: UserLanguage, prevError?: string): string {
   const lastMove = moves.at(-1)
   const lastMoveStr = lastMove
     ? `Last Black move: ${'ABCDEFGHIJKLMNO'[lastMove.x]}${lastMove.y + 1} (x=${lastMove.x}, y=${lastMove.y})`
@@ -207,6 +240,9 @@ IMPORTANT — coordinate system:
 ${lastMoveStr}
 Moves played: ${analysis.moveCount} | Phase: ${analysis.phase}
 ${errorNote}
+Language rule:
+${languageInstruction(language)}
+
 Active threats:
 ${threatLines.length ? threatLines.join('\n') : '  (none detected)'}
 
@@ -215,7 +251,7 @@ Occupied cells (DO NOT play here): ${occupiedList.slice(0, 30).join(', ')}${occu
 It is your turn as ○ (White). Study the board, identify the best move, and respond with ONLY the JSON.`
 }
 
-function parseModelResponse(raw: string, board: Board): { x: number; y: number; reasoning: string; taunt: string; confidence: 'high' | 'medium' | 'low' } {
+function parseModelResponse(raw: string, board: Board, language: UserLanguage): { x: number; y: number; reasoning: string; taunt: string; confidence: 'high' | 'medium' | 'low' } {
   const jsonMatch = raw.match(/\{[\s\S]*?\}/)
   if (!jsonMatch) throw new Error(`No JSON found in: "${raw.slice(0, 80)}"`)
 
@@ -235,18 +271,18 @@ function parseModelResponse(raw: string, board: Board): { x: number; y: number; 
     ? parsed.confidence as 'high' | 'medium' | 'low'
     : 'medium'
 
-  return { x, y, reasoning: String(parsed.reasoning ?? ''), taunt: String(parsed.taunt ?? ''), confidence }
+  return { x, y, reasoning: String(parsed.reasoning ?? ''), taunt: normalizeTaunt(String(parsed.taunt ?? ''), language), confidence }
 }
 
 async function modelDecideNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
-  const { analysis, llm, board, moves } = state
+  const { analysis, llm, board, moves, language } = state
   if (!analysis) return {}
 
   const steps: string[] = []
   let lastError: string | undefined
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const prompt = buildPrompt(analysis, moves, board, lastError)
+    const prompt = buildPrompt(analysis, moves, board, language, lastError)
 
     try {
       const response = await llm.invoke([
@@ -258,7 +294,7 @@ async function modelDecideNode(state: AgentStateType): Promise<Partial<AgentStat
         ? response.content
         : (response.content as any[])[0]?.text ?? ''
 
-      const { x, y, reasoning, taunt, confidence } = parseModelResponse(raw, board)
+      const { x, y, reasoning, taunt, confidence } = parseModelResponse(raw, board, language)
       const allowed = analysis.candidates.slice(0, 10).some(c => c.x === x && c.y === y)
       if (!allowed && analysis.candidates.length) {
         const best = analysis.candidates[0]!
@@ -348,6 +384,7 @@ export async function runGomokuAgent(input: AgentInput): Promise<AgentOutput> {
     board: input.board,
     moves: input.moves,
     llm,
+    language: input.language ?? 'zh',
   })
 
   if (!result.finalMove) {
@@ -376,6 +413,7 @@ export async function streamGomokuAgent(
   const board = input.board
   const moves = input.moves
   const config = input.config
+  const language = input.language ?? 'zh'
 
   // --- precompute ---
   const analysis = analyzeBoard(board, moves)
@@ -386,7 +424,7 @@ export async function streamGomokuAgent(
     emit({ type: 'step', text: thinkingSteps[0] })
     const m = analysis.criticalAttack
     const col = 'ABCDEFGHIJKLMNO'[m.x]
-    emit({ type: 'done', move: m, reasoning: 'Winning move — five in a row!', taunt: "GG. Did you even see that coming?", confidence: 'high', thinkingSteps })
+    emit({ type: 'done', move: m, reasoning: 'Winning move — five in a row!', taunt: fallbackTaunt(language, 'win'), confidence: 'high', thinkingSteps })
     return
   }
 
@@ -395,7 +433,7 @@ export async function streamGomokuAgent(
     emit({ type: 'step', text: thinkingSteps[0] })
     const m = analysis.criticalDefense
     const col = 'ABCDEFGHIJKLMNO'[m.x]
-    emit({ type: 'done', move: m, reasoning: 'Blocking your winning threat.', taunt: "Nice try. Blocked.", confidence: 'high', thinkingSteps })
+    emit({ type: 'done', move: m, reasoning: 'Blocking your winning threat.', taunt: fallbackTaunt(language, 'block'), confidence: 'high', thinkingSteps })
     return
   }
 
@@ -408,7 +446,7 @@ export async function streamGomokuAgent(
       type: 'done',
       move: { x: topCandidate.x, y: topCandidate.y },
       reasoning: topCandidate.reason,
-      taunt: "That position is already doing the hard work for me.",
+      taunt: fallbackTaunt(language, 'tactic'),
       confidence: 'high',
       thinkingSteps,
     })
@@ -421,13 +459,11 @@ export async function streamGomokuAgent(
 
   // --- model streaming ---
   const llm = createLLM(config)
-  const prompt = buildPrompt(analysis, moves, board)
-
   let fullText = ''
   let lastError: string | undefined
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const attemptPrompt = buildPrompt(analysis, moves, board, lastError)
+    const attemptPrompt = buildPrompt(analysis, moves, board, language, lastError)
     fullText = ''
 
     try {
@@ -485,7 +521,7 @@ export async function streamGomokuAgent(
       thinkingSteps.push(stepLabel)
       emit({ type: 'step', text: stepLabel })
 
-      const { x, y, reasoning, taunt, confidence } = parseModelResponse(fullText, board)
+      const { x, y, reasoning, taunt, confidence } = parseModelResponse(fullText, board, language)
       const allowed = analysis.candidates.slice(0, 10).some(c => c.x === x && c.y === y)
       if (!allowed && analysis.candidates.length) {
         const best = analysis.candidates[0]!

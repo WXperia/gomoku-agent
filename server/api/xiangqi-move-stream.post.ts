@@ -28,6 +28,7 @@ const RequestSchema = z.object({
   })),
   provider: z.enum(['openai', 'anthropic', 'deepseek', 'minimax']).default('anthropic'),
   modelName: z.string().optional(),
+  language: z.enum(['zh', 'en']).default('zh'),
 })
 
 const PLACEHOLDER_KEYS = new Set(['sk-...', 'sk-ant-...', ''])
@@ -39,7 +40,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: `Invalid request: ${parsed.error.message}` })
   }
 
-  const { gameId, board, legalMoves, moves, provider, modelName } = parsed.data
+  const { gameId, board, legalMoves, moves, provider, modelName, language } = parsed.data
   await requireAuthenticatedGame(event, gameId, 'xiangqi')
 
   const config = useRuntimeConfig()
@@ -83,6 +84,7 @@ export default defineEventHandler(async (event) => {
     legalMoves: legalMoves as XiangqiMove[],
     moves,
     config: aiConfig,
+    language,
   }, send)
     .catch((err) => send({ type: 'error', message: err?.message || String(err) }))
     .finally(() => writer.close())

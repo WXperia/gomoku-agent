@@ -9,6 +9,7 @@ const RequestSchema = z.object({
   moves: z.array(z.object({ x: z.number(), y: z.number(), player: z.union([z.literal(1), z.literal(2)]) })),
   provider: z.enum(['openai', 'anthropic', 'deepseek', 'minimax']).default('anthropic'),
   modelName: z.string().optional(),
+  language: z.enum(['zh', 'en']).default('zh'),
 })
 
 const PLACEHOLDER_KEYS = new Set(['sk-...', 'sk-ant-...', ''])
@@ -20,7 +21,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: `Invalid request: ${parsed.error.message}` })
   }
 
-  const { gameId, board, moves, provider, modelName } = parsed.data
+  const { gameId, board, moves, provider, modelName, language } = parsed.data
   await requireAuthenticatedGame(event, gameId, 'gomoku')
 
   const config = useRuntimeConfig()
@@ -59,7 +60,7 @@ export default defineEventHandler(async (event) => {
     writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
   }
 
-  streamGomokuAgent({ board, moves, config: aiConfig }, send)
+  streamGomokuAgent({ board, moves, config: aiConfig, language }, send)
     .catch((err) => send({ type: 'error', message: err?.message || String(err) }))
     .finally(() => writer.close())
 

@@ -160,6 +160,16 @@ export const useGameStore = defineStore('game', {
       return { Authorization: `Bearer ${session.access_token}` }
     },
 
+    getPreferredLanguage(): 'zh' | 'en' {
+      if (typeof window === 'undefined') return 'zh'
+      const cookieLang = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('gomoku_lang='))
+        ?.split('=')[1]
+      const lang = decodeURIComponent(cookieLang || navigator.language || 'zh').toLowerCase()
+      return lang.startsWith('zh') ? 'zh' : 'en'
+    },
+
     async setUser(userData: Omit<User, 'id' | 'authUserId' | 'totalMoves' | 'gamesPlayed' | 'wins' | 'createdAt'>) {
       const browserFingerprint = await getBrowserFingerprint()
       const session = await this.ensureAuthSession().catch((e) => {
@@ -637,6 +647,7 @@ export const useGameStore = defineStore('game', {
               moves: this.moves,
               provider: model.provider,
               modelName: model.modelName,
+              language: this.getPreferredLanguage(),
             }),
           }).then(async (res) => {
           if (!res.ok || !res.body) {
@@ -822,6 +833,7 @@ export const useGameStore = defineStore('game', {
               moves: this.moves,
               provider: model.provider,
               modelName: model.modelName,
+              language: this.getPreferredLanguage(),
             }),
           }).then(async (res) => {
           if (!res.ok || !res.body) {

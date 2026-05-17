@@ -1,5 +1,5 @@
 import { HumanMessage, SystemMessage } from '@langchain/core/messages'
-import { createLLM, type AIConfig } from './gomokuAgent'
+import { createLLM, type AIConfig, type UserLanguage } from './gomokuAgent'
 
 export type XiangqiPiece = 'rK' | 'rA' | 'rB' | 'rN' | 'rR' | 'rC' | 'rP' | 'bK' | 'bA' | 'bB' | 'bN' | 'bR' | 'bC' | 'bP'
 
@@ -40,6 +40,29 @@ Strategic priorities:
 Respond with ONLY JSON:
 {"fromX":0,"fromY":0,"toX":0,"toY":0,"reasoning":"short strategic reason","confidence":"high|medium|low","taunt":"short optional taunt"}`
 
+function languageInstruction(language: UserLanguage) {
+  return language === 'zh'
+    ? 'The user interface language is Simplified Chinese. The "taunt" field MUST be Simplified Chinese.'
+    : 'The user interface language is English. The "taunt" field MUST be English.'
+}
+
+function hasCjk(text: string) {
+  return /[\u3400-\u9fff]/.test(text)
+}
+
+function fallbackTaunt(language: UserLanguage) {
+  return language === 'zh'
+    ? '这步棋很讲道理，难受的部分留给你。'
+    : 'That move is clean. The uncomfortable part is yours.'
+}
+
+function normalizeTaunt(taunt: string, language: UserLanguage) {
+  const trimmed = taunt.trim()
+  if (!trimmed) return fallbackTaunt(language)
+  if (language === 'zh') return hasCjk(trimmed) ? trimmed : fallbackTaunt(language)
+  return hasCjk(trimmed) ? fallbackTaunt(language) : trimmed
+}
+
 function coord(x: number, y: number) {
   return `${FILES[x]}${y + 1}`
 }
@@ -60,7 +83,7 @@ function legalMovesToText(board: (XiangqiPiece | null)[][], legalMoves: XiangqiM
   }).join('\n')
 }
 
-function parseResponse(raw: string, legalMoves: XiangqiMove[]) {
+function parseResponse(raw: string, legalMoves: XiangqiMove[], language: UserLanguage) {
   const jsonMatch = raw.match(/\{[\s\S]*?\}/)
   if (!jsonMatch) throw new Error(`No JSON found in response: ${raw.slice(0, 120)}`)
   const parsed = JSON.parse(jsonMatch[0])
@@ -79,7 +102,7 @@ function parseResponse(raw: string, legalMoves: XiangqiMove[]) {
   return {
     move: legal,
     reasoning: String(parsed.reasoning ?? ''),
-    taunt: String(parsed.taunt ?? ''),
+    taunt: normalizeTaunt(String(parsed.taunt ?? ''), language),
     confidence,
   }
 }
@@ -89,8 +112,10 @@ export async function runXiangqiAgent(input: {
   legalMoves: XiangqiMove[]
   moves: Array<{ fromX?: number; fromY?: number; x: number; y: number; player: 1 | 2; piece?: string; captured?: string | null }>
   config: AIConfig
+  language?: UserLanguage
 }): Promise<XiangqiAgentOutput> {
   const llm = createLLM(input.config)
+  const language = input.language ?? 'zh'
   const thinkingSteps = [`[Rules] Received ${input.legalMoves.length} legal moves from validator.`]
 
   const lastMoves = input.moves.slice(-8).map(m => {
@@ -103,6 +128,9 @@ ${boardToText(input.board)}
 
 Recent moves:
 ${lastMoves || '(none)'}
+
+Language rule:
+${languageInstruction(language)}
 
 Legal Black moves:
 ${legalMovesToText(input.board, input.legalMoves)}
@@ -120,7 +148,7 @@ Pick the best legal Black move.`
       : (response.content as any[])[0]?.text ?? ''
 
     try {
-      const parsed = parseResponse(raw, input.legalMoves)
+      const parsed = parseResponse(raw, input.legalMoves, language)
       thinkingSteps.push(`[Model attempt ${attempt}] ${coord(parsed.move.fromX, parsed.move.fromY)} -> ${coord(parsed.move.toX, parsed.move.toY)}: ${parsed.reasoning.slice(0, 100)}`)
       return {
         ...parsed,
