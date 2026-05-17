@@ -46,6 +46,7 @@
         <!-- Board -->
         <div class="bg-card border border-card rounded-2xl p-3 sm:p-4 flex items-center justify-center min-h-64">
           <XiangqiBoard v-if="gameStore.selectedGameKind === 'xiangqi'" />
+          <ChessBoard v-else-if="gameStore.selectedGameKind === 'chess'" />
           <GameBoard v-else @cell-click="handleCellClick" />
         </div>
 
@@ -72,7 +73,7 @@
               </div>
               <div class="flex flex-col gap-0.5">
                 <span class="text-xs text-muted">{{ $t('play.your_color') }}</span>
-                <span class="text-2xl text-stone-black">{{ gameStore.selectedGameKind === 'xiangqi' ? '紅' : '●' }}</span>
+                <span class="text-2xl text-stone-black">{{ gameStore.selectedGameKind === 'xiangqi' ? '紅' : gameStore.selectedGameKind === 'chess' ? '♔' : '●' }}</span>
               </div>
             </div>
           </div>

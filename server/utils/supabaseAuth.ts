@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 
-type GameKind = 'gomoku' | 'xiangqi'
+type GameKind = 'gomoku' | 'xiangqi' | 'chess'
 
 type AuthenticatedGame = {
   userId: string

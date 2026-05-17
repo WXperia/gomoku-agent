@@ -219,6 +219,7 @@ const selectedId = ref<string | null>(null)
 const gameModes = [
   { id: 'gomoku' as const, name: '五子棋', icon: '●', description: '连成五子，快速攻防' },
   { id: 'xiangqi' as const, name: '中国象棋', icon: '帥', description: '楚河汉界，模型执黑' },
+  { id: 'chess' as const, name: '国际象棋', icon: '♔', description: '经典 8x8，模型执黑' },
 ]
 const showUserModal = ref(false)
 const nickname = ref('')
@@ -229,7 +230,7 @@ const location = ref({ country: '', countryCode: '', flag: '🌐' })
 
 const selectedMode = computed(() => gameModes.find(mode => mode.id === gameStore.selectedGameKind) ?? gameModes[0])
 const displayedModels = computed(() => {
-  if (gameStore.selectedGameKind === 'xiangqi') {
+  if (gameStore.selectedGameKind === 'xiangqi' || gameStore.selectedGameKind === 'chess') {
     return gameStore.aiModels.filter(model => model.provider !== 'local')
   }
   return gameStore.aiModels

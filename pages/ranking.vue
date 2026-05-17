@@ -33,6 +33,21 @@
         </button>
       </div>
 
+      <div class="grid grid-cols-3 gap-2 mb-6">
+        <button
+          v-for="mode in gameModes"
+          :key="mode.value"
+          class="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold border transition-all"
+          :class="gameStore.rankingGameKind === mode.value
+            ? 'border-gold text-gold bg-gold/10'
+            : 'bg-card border-card text-secondary hover:border-gold/40'"
+          @click="gameStore.rankingGameKind = mode.value"
+        >
+          <span>{{ mode.icon }}</span>
+          <span>{{ mode.label }}</span>
+        </button>
+      </div>
+
       <!-- Table -->
       <div class="bg-card border border-card rounded-2xl overflow-hidden mb-6">
         <div class="overflow-x-auto">
@@ -154,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { useGameStore } from '~/stores/gameStore'
+import { useGameStore, type GameKind } from '~/stores/gameStore'
 
 const gameStore = useGameStore()
 const router = useRouter()
@@ -166,14 +181,21 @@ const tabs = [
   { value: 'ai' as const, icon: '🤖', label: 'ranking.ai_tab' },
 ]
 
-onMounted(() => {
-  gameStore.loadUsers()
-  gameStore.loadAIStats()
+const gameModes: Array<{ value: GameKind; icon: string; label: string }> = [
+  { value: 'gomoku', icon: '●', label: '五子棋' },
+  { value: 'xiangqi', icon: '帥', label: '中国象棋' },
+  { value: 'chess', icon: '♔', label: '国际象棋' },
+]
+
+onMounted(async () => {
+  await gameStore.loadUsers()
+  await gameStore.loadAIStats()
+  await gameStore.loadRankingsByGameKind()
   if (!gameStore.currentUser) router.push('/')
 })
 
-const humanRanking = computed(() => gameStore.humanRanking)
-const aiRanking = computed(() => gameStore.aiRanking)
+const humanRanking = computed(() => gameStore.humanRankingByKind)
+const aiRanking = computed(() => gameStore.aiRankingByKind)
 
 function rankBg(rank: number): string {
   if (rank === 1) return 'bg-gradient-to-br from-yellow-400 to-yellow-600 text-gray-900'

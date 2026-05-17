@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { useSupabase } from '~/composables/useSupabase'
 import { getBrowserFingerprint } from '~/composables/useBrowserFingerprint'
+import { Chess, type Move as ChessJsMove, type Square } from 'chess.js'
 
 export interface User {
   id: string
@@ -31,6 +32,15 @@ export interface AIModel {
   games: number
 }
 
+export interface GameKindStats {
+  totalMoves: number
+  gamesPlayed: number
+  wins: number
+}
+
+export type UserRankingRow = User & { kindStats?: Partial<Record<GameKind, GameKindStats>> }
+export type AIRankingRow = AIModel & { kindStats?: Partial<Record<GameKind, { wins: number; games: number }>> }
+
 export interface Move {
   x: number
   y: number
@@ -39,11 +49,14 @@ export interface Move {
   fromY?: number
   piece?: string
   captured?: string | null
+  san?: string
+  uci?: string
 }
 
 export type GameStatus = 'idle' | 'playing' | 'won' | 'lost' | 'draw'
-export type GameKind = 'gomoku' | 'xiangqi'
+export type GameKind = 'gomoku' | 'xiangqi' | 'chess'
 export type XiangqiPiece = 'rK' | 'rA' | 'rB' | 'rN' | 'rR' | 'rC' | 'rP' | 'bK' | 'bA' | 'bB' | 'bN' | 'bR' | 'bC' | 'bP'
+export type ChessPiece = 'wK' | 'wQ' | 'wR' | 'wB' | 'wN' | 'wP' | 'bK' | 'bQ' | 'bR' | 'bB' | 'bN' | 'bP'
 
 function createXiangqiBoard(): (XiangqiPiece | null)[][] {
   return [
@@ -83,6 +96,7 @@ export const useGameStore = defineStore('game', {
     // Game state
     board: Array(15).fill(null).map(() => Array(15).fill(0)) as number[][],
     xiangqiBoard: createXiangqiBoard(),
+    chessFen: new Chess().fen(),
     currentPlayer: 1 as 1 | 2,
     moves: [] as Move[],
     gameStatus: 'idle' as GameStatus,
@@ -109,7 +123,8 @@ export const useGameStore = defineStore('game', {
     }[],
 
     // Users leaderboard (from storage)
-    users: [] as User[],
+    users: [] as UserRankingRow[],
+    rankingGameKind: 'gomoku' as GameKind,
   }),
 
   getters: {
@@ -122,6 +137,28 @@ export const useGameStore = defineStore('game', {
     aiRanking: (state) => {
       return [...state.aiModels]
         .sort((a, b) => b.wins - a.wins)
+        .slice(0, 20)
+    },
+
+    humanRankingByKind: (state) => {
+      return [...state.users]
+        .map(user => {
+          const stats = user.kindStats?.[state.rankingGameKind]
+          return stats ? { ...user, totalMoves: stats.totalMoves, gamesPlayed: stats.gamesPlayed, wins: stats.wins } : { ...user, totalMoves: 0, gamesPlayed: 0, wins: 0 }
+        })
+        .filter(user => user.gamesPlayed > 0)
+        .sort((a, b) => b.wins - a.wins || b.totalMoves - a.totalMoves)
+        .slice(0, 100)
+    },
+
+    aiRankingByKind: (state) => {
+      return [...state.aiModels]
+        .map(model => {
+          const stats = (model as AIRankingRow).kindStats?.[state.rankingGameKind]
+          return stats ? { ...model, wins: stats.wins, games: stats.games } : { ...model, wins: 0, games: 0 }
+        })
+        .filter(model => model.games > 0)
+        .sort((a, b) => b.wins - a.wins || b.games - a.games)
         .slice(0, 20)
     },
 
@@ -327,7 +364,7 @@ export const useGameStore = defineStore('game', {
       }
 
       const storedGameKind = localStorage.getItem('gomoku_game_kind')
-      if (storedGameKind === 'gomoku' || storedGameKind === 'xiangqi') {
+      if (storedGameKind === 'gomoku' || storedGameKind === 'xiangqi' || storedGameKind === 'chess') {
         this.selectedGameKind = storedGameKind
       }
 
@@ -361,6 +398,62 @@ export const useGameStore = defineStore('game', {
       }
     },
 
+    async loadRankingsByGameKind() {
+      if (typeof window === 'undefined') return
+      try {
+        const sb = useSupabase()
+        const { data, error } = await sb
+          .from('games')
+          .select('game_kind,result,move_count,model_id,user:users(id,nickname,country,country_code,flag,browser_fingerprint,created_at)')
+          .eq('status', 'finished')
+        if (error) throw error
+
+        const userMap = new Map<string, UserRankingRow>()
+        const aiMap = new Map<string, Partial<Record<GameKind, { wins: number; games: number }>>>()
+
+        for (const row of data ?? []) {
+          const kind = row.game_kind as GameKind
+          if (kind !== 'gomoku' && kind !== 'xiangqi' && kind !== 'chess') continue
+
+          const modelStats = aiMap.get(row.model_id) ?? {}
+          const currentModel = modelStats[kind] ?? { wins: 0, games: 0 }
+          currentModel.games++
+          if (row.result === 'lost') currentModel.wins++
+          modelStats[kind] = currentModel
+          aiMap.set(row.model_id, modelStats)
+
+          const user = Array.isArray(row.user) ? row.user[0] : row.user
+          if (!user?.id) continue
+          const existing = userMap.get(user.id) ?? {
+            id: user.id,
+            nickname: user.nickname,
+            country: user.country,
+            countryCode: user.country_code,
+            flag: user.flag,
+            totalMoves: 0,
+            gamesPlayed: 0,
+            wins: 0,
+            browserFingerprint: user.browser_fingerprint || undefined,
+            createdAt: user.created_at,
+            kindStats: {},
+          }
+          const currentUser = existing.kindStats?.[kind] ?? { totalMoves: 0, gamesPlayed: 0, wins: 0 }
+          currentUser.gamesPlayed++
+          currentUser.totalMoves += row.move_count || 0
+          if (row.result === 'won') currentUser.wins++
+          existing.kindStats = { ...(existing.kindStats ?? {}), [kind]: currentUser }
+          userMap.set(user.id, existing)
+        }
+
+        this.users = [...userMap.values()]
+        this.aiModels.forEach(model => {
+          ;(model as AIRankingRow).kindStats = aiMap.get(model.id) ?? {}
+        })
+      } catch (e) {
+        console.warn('Supabase loadRankingsByGameKind failed:', e)
+      }
+    },
+
     saveAIStats() {
       if (typeof window === 'undefined') return
       const stats: Record<string, { wins: number; games: number }> = {}
@@ -384,9 +477,16 @@ export const useGameStore = defineStore('game', {
       }
     },
 
+    currentBoardSnapshot() {
+      if (this.selectedGameKind === 'xiangqi') return this.xiangqiBoard
+      if (this.selectedGameKind === 'chess') return { fen: this.chessFen }
+      return this.board
+    },
+
     async startGame() {
       this.board = Array(15).fill(null).map(() => Array(15).fill(0))
       this.xiangqiBoard = createXiangqiBoard()
+      this.chessFen = new Chess().fen()
       this.currentPlayer = 1
       this.moves = []
       this.gameStatus = 'playing'
@@ -473,7 +573,7 @@ export const useGameStore = defineStore('game', {
           piece: move.piece ?? null,
           captured: move.captured ?? null,
           duration_ms: Math.max(0, Math.round(durationMs)),
-          board_snapshot: this.selectedGameKind === 'xiangqi' ? this.xiangqiBoard : this.board,
+          board_snapshot: this.currentBoardSnapshot(),
           ai_reasoning: aiLog?.reasoning ?? null,
           ai_taunt: aiLog?.taunt ?? null,
           ai_confidence: aiLog?.confidence ?? null,
@@ -500,7 +600,7 @@ export const useGameStore = defineStore('game', {
 
     async placeStone(x: number, y: number): Promise<boolean> {
       if (this.gameStatus !== 'playing') return false
-      if (this.selectedGameKind === 'xiangqi') return false
+      if (this.selectedGameKind !== 'gomoku') return false
       if (this.board[y][x] !== 0) return false
       if (this.currentPlayer !== 1) return false // Human must be player 1
 
@@ -565,12 +665,57 @@ export const useGameStore = defineStore('game', {
       return true
     },
 
+    async moveChessPiece(from: Square, to: Square, promotion = 'q'): Promise<boolean> {
+      if (this.gameStatus !== 'playing') return false
+      if (this.selectedGameKind !== 'chess') return false
+      if (this.currentPlayer !== 1 || this.aiMovePending) return false
+
+      const chess = new Chess(this.chessFen)
+      if (chess.turn() !== 'w') return false
+
+      const now = Date.now()
+      const durationMs = this.lastMoveAt ? now - this.lastMoveAt : 0
+      let result: ChessJsMove
+      try {
+        result = chess.move({ from, to, promotion })
+      } catch {
+        return false
+      }
+      if (!result) return false
+
+      this.chessFen = chess.fen()
+      const move = this.chessMoveToLog(result, 1)
+      this.moves.push(move)
+      await this.recordMove(move, durationMs)
+      this.lastMoveAt = Date.now()
+
+      if (chess.isCheckmate()) {
+        this.gameStatus = 'won'
+        this.winner = 1
+        await this.endGame(true)
+        return true
+      }
+      if (chess.isDraw()) {
+        this.gameStatus = 'draw'
+        await this.endGame(false)
+        return true
+      }
+
+      this.currentPlayer = 2
+      this.aiMovePending = true
+      return true
+    },
+
     async aiMove() {
       if (this.gameStatus !== 'playing') return
       if (!this.aiMovePending) return
 
       if (this.selectedGameKind === 'xiangqi') {
         await this.aiXiangqiMove()
+        return
+      }
+      if (this.selectedGameKind === 'chess') {
+        await this.aiChessMove()
         return
       }
 
@@ -885,6 +1030,138 @@ export const useGameStore = defineStore('game', {
       })
     },
 
+    async aiChessMove() {
+      const startedAt = Date.now()
+      const chess = new Chess(this.chessFen)
+      const legalMoves = chess.moves({ verbose: true }) as ChessJsMove[]
+      if (!legalMoves.length) {
+        this.gameStatus = chess.isCheckmate() ? 'won' : 'draw'
+        this.winner = chess.isCheckmate() ? 1 : null
+        this.aiMovePending = false
+        await this.endGame(chess.isCheckmate())
+        return
+      }
+
+      const model = this.selectedModel
+      if (!model || model.provider === 'local') {
+        const picked = legalMoves[0]!
+        chess.move(picked)
+        this.chessFen = chess.fen()
+        const move = this.chessMoveToLog(picked, 2)
+        this.moves.push(move)
+        this.aiMovePending = false
+        this.aiThinking = {
+          moveNumber: this.moves.filter(m => m.player === 2).length,
+          moveLabel: picked.san,
+          reasoning: 'Local fallback selected the first legal chess move.',
+          taunt: '',
+          thinkingSteps: [`[Chess] Local fallback chose ${picked.san}.`],
+          confidence: 'low',
+        }
+        this.aiThinkingHistory.unshift(this.aiThinking)
+        await this.recordMove(move, Date.now() - startedAt, this.aiThinking)
+        this.lastMoveAt = Date.now()
+        this.finishChessAITurn(chess)
+        return
+      }
+
+      try {
+        const result = await this.aiChessMoveStream(model, legalMoves)
+        const chosen = legalMoves.find(m => m.from === result.move.from && m.to === result.move.to && (m.promotion || 'q') === (result.move.promotion || 'q'))
+        if (!chosen) throw new Error('AI chose an illegal chess move')
+        chess.move(chosen)
+        this.chessFen = chess.fen()
+        const move = this.chessMoveToLog(chosen, 2)
+        this.moves.push(move)
+        this.aiMovePending = false
+        this.aiThinking = result.aiLog
+        this.aiThinkingHistory.unshift(result.aiLog)
+        await this.recordMove(move, Date.now() - startedAt, result.aiLog)
+        this.lastMoveAt = Date.now()
+        this.finishChessAITurn(chess)
+      } catch (err) {
+        console.warn('Chess AI failed:', err)
+        this.aiMovePending = false
+        this.currentPlayer = 1
+        this.aiThinking = {
+          moveNumber: this.moves.filter(m => m.player === 2).length + 1,
+          moveLabel: '...',
+          reasoning: `Chess AI failed: ${err instanceof Error ? err.message : String(err)}`,
+          taunt: '',
+          thinkingSteps: ['[Chess] AI failed before choosing a legal move.'],
+          confidence: 'low',
+        }
+        this.aiThinkingHistory.unshift(this.aiThinking)
+      }
+    },
+
+    async aiChessMoveStream(model: typeof this.selectedModel, legalMoves: ChessJsMove[]): Promise<{
+      move: { from: Square; to: Square; promotion?: string }
+      aiLog: {
+        moveNumber: number
+        moveLabel: string
+        reasoning: string
+        taunt: string
+        thinkingSteps: string[]
+        confidence: 'high' | 'medium' | 'low'
+      }
+    }> {
+      if (!model) throw new Error('No AI model selected')
+      if (!this.currentGameId) throw new Error('Game record is not ready yet.')
+
+      const authHeader = await this.getAuthHeader()
+      const res = await fetch('/api/chess-move-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader },
+        body: JSON.stringify({
+          gameId: this.currentGameId,
+          fen: this.chessFen,
+          legalMoves: legalMoves.map(m => ({ from: m.from, to: m.to, san: m.san, lan: m.lan, promotion: m.promotion })),
+          moves: this.moves,
+          provider: model.provider,
+          modelName: model.modelName,
+          language: this.getPreferredLanguage(),
+        }),
+      })
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      const thinkingSteps: string[] = []
+      const moveNumber = this.moves.filter(m => m.player === 2).length + 1
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const parts = buf.split('\n\n')
+        buf = parts.pop() ?? ''
+
+        for (const part of parts) {
+          const line = part.replace(/^data: /, '').trim()
+          if (!line) continue
+          const event = JSON.parse(line)
+          if (event.type === 'step') thinkingSteps.push(event.text)
+          if (event.type === 'error') throw new Error(event.message)
+          if (event.type === 'done') {
+            return {
+              move: event.move,
+              aiLog: {
+                moveNumber,
+                moveLabel: event.san || `${event.move.from}-${event.move.to}`,
+                reasoning: event.reasoning,
+                taunt: event.taunt,
+                thinkingSteps: event.thinkingSteps?.length ? event.thinkingSteps : thinkingSteps,
+                confidence: event.confidence,
+              },
+            }
+          }
+        }
+      }
+      throw new Error('Chess AI stream ended without a move')
+    },
+
     getAllXiangqiMoves(player: 1 | 2) {
       const prefix = player === 1 ? 'r' : 'b'
       const moves: Array<{ fromX: number; fromY: number; toX: number; toY: number; score: number }> = []
@@ -1063,6 +1340,43 @@ export const useGameStore = defineStore('game', {
 
     xiangqiCoord(x: number, y: number): string {
       return `${String.fromCharCode(65 + x)}${y + 1}`
+    },
+
+    chessSquareToCoord(square: string) {
+      const file = square.charCodeAt(0) - 97
+      const rank = Number(square[1])
+      return { x: file, y: 8 - rank }
+    },
+
+    chessMoveToLog(move: ChessJsMove, player: 1 | 2): Move {
+      const to = this.chessSquareToCoord(move.to)
+      const from = this.chessSquareToCoord(move.from)
+      return {
+        x: to.x,
+        y: to.y,
+        fromX: from.x,
+        fromY: from.y,
+        player,
+        piece: move.piece,
+        captured: move.captured ?? null,
+        san: move.san,
+        uci: `${move.from}${move.to}${move.promotion ?? ''}`,
+      }
+    },
+
+    finishChessAITurn(chess: Chess) {
+      if (chess.isCheckmate()) {
+        this.gameStatus = 'lost'
+        this.winner = 2
+        this.endGame(false)
+        return
+      }
+      if (chess.isDraw()) {
+        this.gameStatus = 'draw'
+        this.endGame(false)
+        return
+      }
+      this.currentPlayer = 1
     },
 
     findBestMove(): {x: number, y: number} | null {
@@ -1353,6 +1667,7 @@ export const useGameStore = defineStore('game', {
     resetGame() {
       this.board = Array(15).fill(null).map(() => Array(15).fill(0))
       this.xiangqiBoard = createXiangqiBoard()
+      this.chessFen = new Chess().fen()
       this.currentPlayer = 1
       this.moves = []
       this.gameStatus = 'idle'

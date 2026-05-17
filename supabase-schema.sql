@@ -65,7 +65,7 @@ alter table public.games drop constraint if exists games_status_check;
 alter table public.games drop constraint if exists games_game_kind_check;
 alter table public.games add constraint games_result_check check (result is null or result in ('won','lost','draw'));
 alter table public.games add constraint games_status_check check (status in ('playing','finished'));
-alter table public.games add constraint games_game_kind_check check (game_kind in ('gomoku','xiangqi'));
+alter table public.games add constraint games_game_kind_check check (game_kind in ('gomoku','xiangqi','chess'));
 update public.games
 set status = case when result is null then 'playing' else 'finished' end
 where status is null or status = 'playing';
