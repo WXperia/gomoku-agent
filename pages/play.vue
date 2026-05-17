@@ -45,11 +45,12 @@
 
         <!-- Board -->
         <div class="bg-card border border-card rounded-2xl p-3 sm:p-4 flex items-center justify-center min-h-64">
-          <GameBoard @cell-click="handleCellClick" />
+          <XiangqiBoard v-if="gameStore.selectedGameKind === 'xiangqi'" />
+          <GameBoard v-else @cell-click="handleCellClick" />
         </div>
 
         <!-- Side panel -->
-        <aside class="flex flex-row lg:flex-col gap-3 overflow-x-auto lg:overflow-x-visible pb-1 lg:pb-0">
+        <aside class="flex flex-row lg:flex-col gap-3 overflow-x-auto lg:overflow-x-visible lg:overflow-y-hidden pb-1 lg:pb-0 min-h-0 lg:h-full">
 
           <!-- Match info -->
           <div class="bg-card border border-card rounded-xl p-4 shrink-0 lg:shrink min-w-48 lg:min-w-0">
@@ -71,13 +72,13 @@
               </div>
               <div class="flex flex-col gap-0.5">
                 <span class="text-xs text-muted">{{ $t('play.your_color') }}</span>
-                <span class="text-2xl text-stone-black">●</span>
+                <span class="text-2xl text-stone-black">{{ gameStore.selectedGameKind === 'xiangqi' ? '紅' : '●' }}</span>
               </div>
             </div>
           </div>
 
           <!-- AI Thinking panel -->
-          <div class="bg-card border border-card rounded-xl p-4 shrink-0 lg:shrink min-w-64 lg:min-w-0 lg:flex-1 flex flex-col min-h-0">
+          <div class="bg-card border border-card rounded-xl p-4 shrink-0 lg:shrink min-w-64 lg:min-w-0 lg:flex-1 flex flex-col min-h-0 lg:overflow-hidden">
             <div class="flex items-center justify-between mb-3">
               <h3 class="text-xs text-secondary uppercase tracking-wider font-display">
                 {{ gameStore.selectedModel?.name }} · {{ $t('play.ai_thinking_log') }}
@@ -102,7 +103,7 @@
             </div>
 
             <!-- History list (newest first) -->
-            <div v-if="gameStore.aiThinkingHistory.length" class="flex flex-col gap-3 overflow-y-auto flex-1 min-h-0">
+            <div v-if="gameStore.aiThinkingHistory.length" class="flex flex-col gap-3 overflow-y-auto overscroll-contain flex-1 min-h-0 pr-1">
               <div
                 v-for="(entry, idx) in gameStore.aiThinkingHistory"
                 :key="entry.moveNumber"
@@ -222,14 +223,14 @@ const { t } = useI18n()
 const gameStore = useGameStore()
 const router = useRouter()
 
-onMounted(() => {
+onMounted(async () => {
   gameStore.loadUsers()
   gameStore.loadAIStats()
   if (!gameStore.currentUser || !gameStore.selectedModel) {
     router.push('/')
     return
   }
-  if (gameStore.gameStatus === 'idle') gameStore.startGame()
+  if (gameStore.gameStatus === 'idle') await gameStore.startGame()
 })
 
 async function handleCellClick(x: number, y: number) {

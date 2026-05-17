@@ -1,11 +1,30 @@
-import { streamGomokuAgent, type AIConfig, type ModelProvider } from '../utils/gomokuAgent'
+import { streamXiangqiAgent, type XiangqiMove, type XiangqiPiece } from '../utils/xiangqiAgent'
+import { type AIConfig, type ModelProvider } from '../utils/gomokuAgent'
 import { requireAuthenticatedGame } from '../utils/supabaseAuth'
 import { z } from 'zod'
 
+const MoveSchema = z.object({
+  fromX: z.number().int().min(0).max(8),
+  fromY: z.number().int().min(0).max(9),
+  toX: z.number().int().min(0).max(8),
+  toY: z.number().int().min(0).max(9),
+  piece: z.string().optional(),
+  captured: z.string().nullable().optional(),
+})
+
 const RequestSchema = z.object({
   gameId: z.number().int().positive(),
-  board: z.array(z.array(z.number())).length(15),
-  moves: z.array(z.object({ x: z.number(), y: z.number(), player: z.union([z.literal(1), z.literal(2)]) })),
+  board: z.array(z.array(z.string().nullable()).length(9)).length(10),
+  legalMoves: z.array(MoveSchema).min(1),
+  moves: z.array(z.object({
+    x: z.number(),
+    y: z.number(),
+    player: z.union([z.literal(1), z.literal(2)]),
+    fromX: z.number().optional(),
+    fromY: z.number().optional(),
+    piece: z.string().optional(),
+    captured: z.string().nullable().optional(),
+  })),
   provider: z.enum(['openai', 'anthropic', 'deepseek', 'minimax']).default('anthropic'),
   modelName: z.string().optional(),
 })
@@ -19,8 +38,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: `Invalid request: ${parsed.error.message}` })
   }
 
-  const { gameId, board, moves, provider, modelName } = parsed.data
-  await requireAuthenticatedGame(event, gameId, 'gomoku')
+  const { gameId, board, legalMoves, moves, provider, modelName } = parsed.data
+  await requireAuthenticatedGame(event, gameId, 'xiangqi')
 
   const config = useRuntimeConfig()
 
@@ -64,7 +83,12 @@ export default defineEventHandler(async (event) => {
     writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
   }
 
-  streamGomokuAgent({ board, moves, config: aiConfig }, send)
+  streamXiangqiAgent({
+    board: board as (XiangqiPiece | null)[][],
+    legalMoves: legalMoves as XiangqiMove[],
+    moves,
+    config: aiConfig,
+  }, send)
     .catch((err) => send({ type: 'error', message: err?.message || String(err) }))
     .finally(() => writer.close())
 

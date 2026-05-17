@@ -22,7 +22,7 @@ export interface BoardAnalysis {
   threats: ThreatInfo[]
   criticalAttack: Move | null
   criticalDefense: Move | null
-  candidates: Array<Move & { score: number; reason: string }>
+  candidates: Array<Move & { score: number; reason: string; category?: string }>
   boardAscii: string
   moveCount: number
   phase: 'opening' | 'midgame' | 'endgame'
@@ -129,6 +129,223 @@ const THREAT_SCORES: Record<ThreatInfo['type'], number> = {
   open_two: 200,
 }
 
+function hasNeighbor(board: Board, x: number, y: number, radius = 2): boolean {
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx === 0 && dy === 0) continue
+      const nx = x + dx
+      const ny = y + dy
+      if (inBounds(nx, ny) && board[ny][nx] !== 0) return true
+    }
+  }
+  return false
+}
+
+export function isWinningMove(board: Board, x: number, y: number, player: Player): boolean {
+  if (board[y]?.[x] !== 0) return false
+
+  board[y][x] = player
+  try {
+    for (const { dx, dy } of DIRECTIONS) {
+      const total =
+        1 +
+        countConsecutive(board, x, y, dx, dy, player) +
+        countConsecutive(board, x, y, -dx, -dy, player)
+      if (total >= 5) return true
+    }
+    return false
+  } finally {
+    board[y][x] = 0
+  }
+}
+
+function lineStats(board: Board, x: number, y: number, dx: number, dy: number, player: Player) {
+  const fwd = countConsecutive(board, x, y, dx, dy, player)
+  const bwd = countConsecutive(board, x, y, -dx, -dy, player)
+  const fwdEnd = { x: x + (fwd + 1) * dx, y: y + (fwd + 1) * dy }
+  const bwdEnd = { x: x - (bwd + 1) * dx, y: y - (bwd + 1) * dy }
+  const fwdOpen = inBounds(fwdEnd.x, fwdEnd.y) && board[fwdEnd.y][fwdEnd.x] === 0
+  const bwdOpen = inBounds(bwdEnd.x, bwdEnd.y) && board[bwdEnd.y][bwdEnd.x] === 0
+
+  return {
+    total: fwd + bwd + 1,
+    openEnds: (fwdOpen ? 1 : 0) + (bwdOpen ? 1 : 0),
+  }
+}
+
+function scoreFiveCellWindows(board: Board, x: number, y: number, dx: number, dy: number, player: Player) {
+  const opponent = player === 1 ? 2 : 1
+  let score = 0
+  let openFourCount = 0
+  let fourCount = 0
+  let openThreeCount = 0
+
+  for (let start = -4; start <= 0; start++) {
+    const cells: number[] = []
+    let blocked = false
+    for (let i = 0; i < 5; i++) {
+      const nx = x + (start + i) * dx
+      const ny = y + (start + i) * dy
+      if (!inBounds(nx, ny)) {
+        blocked = true
+        break
+      }
+      cells.push(board[ny][nx])
+    }
+    if (blocked || cells.includes(opponent)) continue
+
+    const stones = cells.filter(c => c === player).length
+    const empties = cells.filter(c => c === 0).length
+
+    const before = { x: x + (start - 1) * dx, y: y + (start - 1) * dy }
+    const after = { x: x + (start + 5) * dx, y: y + (start + 5) * dy }
+    const openOutside =
+      (inBounds(before.x, before.y) && board[before.y][before.x] === 0 ? 1 : 0) +
+      (inBounds(after.x, after.y) && board[after.y][after.x] === 0 ? 1 : 0)
+
+    if (stones >= 5) score += 1_000_000
+    else if (stones === 4 && empties === 1) {
+      fourCount++
+      if (openOutside > 0) {
+        openFourCount++
+        score += 160_000
+      } else {
+        score += 55_000
+      }
+    } else if (stones === 3 && empties === 2) {
+      if (openOutside > 0) {
+        openThreeCount++
+        score += 18_000
+      } else {
+        score += 4_000
+      }
+    } else if (stones === 2 && empties === 3) {
+      score += openOutside > 0 ? 600 : 150
+    }
+  }
+
+  return { score, openFourCount, fourCount, openThreeCount }
+}
+
+function evaluateMoveForPlayer(board: Board, x: number, y: number, player: Player) {
+  if (board[y]?.[x] !== 0) return { score: -1, tags: [] as string[] }
+
+  board[y][x] = player
+  try {
+    let score = 0
+    let openFourCount = 0
+    let fourCount = 0
+    let openThreeCount = 0
+    const tags: string[] = []
+
+    for (const { dx, dy } of DIRECTIONS) {
+      const stats = lineStats(board, x, y, dx, dy, player)
+      const windows = scoreFiveCellWindows(board, x, y, dx, dy, player)
+
+      score += windows.score
+      openFourCount += windows.openFourCount
+      fourCount += windows.fourCount
+      openThreeCount += windows.openThreeCount
+
+      if (stats.total >= 5) {
+        score += 1_000_000
+        tags.push('five')
+      } else if (stats.total === 4 && stats.openEnds === 2) {
+        score += 420_000
+        tags.push('open_four')
+      } else if (stats.total === 4 && stats.openEnds === 1) {
+        score += 110_000
+        tags.push('four')
+      } else if (stats.total === 3 && stats.openEnds === 2) {
+        score += 35_000
+        tags.push('open_three')
+      } else if (stats.total === 3 && stats.openEnds === 1) {
+        score += 5_000
+      } else if (stats.total === 2 && stats.openEnds === 2) {
+        score += 900
+      }
+    }
+
+    if (openFourCount >= 1) tags.push('broken_or_open_four')
+    if (openThreeCount >= 2) {
+      score += 95_000
+      tags.push('double_three')
+    }
+    if (fourCount >= 2 || (fourCount >= 1 && openThreeCount >= 1)) {
+      score += 180_000
+      tags.push('double_threat')
+    }
+
+    return { score, tags: [...new Set(tags)] }
+  } finally {
+    board[y][x] = 0
+  }
+}
+
+export function findImmediateWinningMoves(board: Board, player: Player): Move[] {
+  const wins: Move[] = []
+
+  for (let y = 0; y < BOARD_SIZE; y++) {
+    for (let x = 0; x < BOARD_SIZE; x++) {
+      if (board[y][x] !== 0) continue
+      if (!hasNeighbor(board, x, y, 2)) continue
+      if (isWinningMove(board, x, y, player)) wins.push({ x, y })
+    }
+  }
+
+  return wins
+}
+
+function scoreTacticalMove(board: Board, x: number, y: number, player: Player) {
+  const opponent = player === 1 ? 2 : 1
+  const offense = evaluateMoveForPlayer(board, x, y, player)
+  const defense = evaluateMoveForPlayer(board, x, y, opponent as Player)
+
+  let score = offense.score + defense.score * 0.92
+  const tags = new Set<string>()
+  offense.tags.forEach(t => tags.add(t))
+  defense.tags.forEach(t => tags.add(`block_${t}`))
+
+  if (offense.tags.includes('five')) {
+    score += 5_000_000
+    tags.add('winning')
+  }
+  if (defense.tags.includes('five')) {
+    score += 4_500_000
+    tags.add('blocking_win')
+  }
+  if (offense.tags.includes('double_threat') || offense.tags.includes('double_three')) {
+    score += 240_000
+    tags.add('forcing_attack')
+  }
+  if (defense.tags.includes('double_threat') || defense.tags.includes('double_three')) {
+    score += 220_000
+    tags.add('blocking_threat')
+  }
+
+  const dist = Math.abs(x - 7) + Math.abs(y - 7)
+  score += Math.max(0, 18 - dist) * 12
+
+  let neighborBonus = 0
+  for (let dy2 = -2; dy2 <= 2; dy2++) {
+    for (let dx2 = -2; dx2 <= 2; dx2++) {
+      if (dx2 === 0 && dy2 === 0) continue
+      const nx = x + dx2
+      const ny = y + dy2
+      if (inBounds(nx, ny) && board[ny][nx] !== 0) {
+        neighborBonus += Math.abs(dx2) <= 1 && Math.abs(dy2) <= 1 ? 20 : 6
+      }
+    }
+  }
+  score += neighborBonus
+
+  return {
+    score,
+    category: Array.from(tags)[0] || 'positional',
+    tags: Array.from(tags),
+  }
+}
+
 export function scoreMoveHeuristic(board: Board, x: number, y: number, player: Player): number {
   if (board[y][x] !== 0) return -1
 
@@ -173,7 +390,7 @@ export function scoreMoveHeuristic(board: Board, x: number, y: number, player: P
 }
 
 export function getCandidateMoves(board: Board, topN = 20): Array<Move & { score: number }> {
-  const candidates: Array<Move & { score: number }> = []
+  const candidates: Array<Move & { score: number; category?: string }> = []
 
   // If board is empty, play center
   const isEmpty = board.every(row => row.every(c => c === 0))
@@ -182,8 +399,10 @@ export function getCandidateMoves(board: Board, topN = 20): Array<Move & { score
   for (let y = 0; y < BOARD_SIZE; y++) {
     for (let x = 0; x < BOARD_SIZE; x++) {
       if (board[y][x] !== 0) continue
-      const score = scoreMoveHeuristic(board, x, y, 2)
-      if (score > 0) candidates.push({ x, y, score })
+      if (!hasNeighbor(board, x, y, 2)) continue
+      const tactical = scoreTacticalMove(board, x, y, 2)
+      const score = tactical.score + scoreMoveHeuristic(board, x, y, 2) * 0.2
+      if (score > 0) candidates.push({ x, y, score, category: tactical.category })
     }
   }
 
@@ -220,40 +439,8 @@ export function analyzeBoard(board: Board, moves: Move[]): BoardAnalysis {
     moveCount < 10 ? 'opening' :
     moveCount < 60 ? 'midgame' : 'endgame'
 
-  // Find critical moves
-  const aiWinThreat = threats.find(t => t.player === 2 && t.type === 'five')
-  const humanWinThreat = threats.find(t => t.player === 1 && t.type === 'five')
-  const aiOpenFour = threats.find(t => t.player === 2 && t.type === 'open_four')
-  const humanOpenFour = threats.find(t => t.player === 1 && t.type === 'open_four')
-  const aiFour = threats.find(t => t.player === 2 && t.type === 'four')
-  const humanFour = threats.find(t => t.player === 1 && t.type === 'four')
-
-  let criticalAttack: Move | null = null
-  let criticalDefense: Move | null = null
-
-  // If AI can win immediately
-  if (aiWinThreat) {
-    const gap = aiWinThreat.positions.find(p => board[p.y][p.x] === 0)
-    if (gap) criticalAttack = gap
-  } else if (aiOpenFour) {
-    const gap = aiOpenFour.positions.find(p => board[p.y][p.x] === 0)
-    if (gap) criticalAttack = gap
-  } else if (aiFour) {
-    const gap = aiFour.positions.find(p => board[p.y][p.x] === 0)
-    if (gap) criticalAttack = gap
-  }
-
-  // If human is about to win
-  if (humanWinThreat) {
-    const gap = humanWinThreat.positions.find(p => board[p.y][p.x] === 0)
-    if (gap) criticalDefense = gap
-  } else if (humanOpenFour) {
-    const gap = humanOpenFour.positions.find(p => board[p.y][p.x] === 0)
-    if (gap) criticalDefense = gap
-  } else if (humanFour) {
-    const gap = humanFour.positions.find(p => board[p.y][p.x] === 0)
-    if (gap) criticalDefense = gap
-  }
+  const criticalAttack = findImmediateWinningMoves(board, 2)[0] ?? null
+  const criticalDefense = findImmediateWinningMoves(board, 1)[0] ?? null
 
   const rawCandidates = getCandidateMoves(board, 15)
   const candidates = rawCandidates.map(c => ({
@@ -273,8 +460,8 @@ function describeMove(board: Board, x: number, y: number): string {
   const row = y + 1
   const pos = `${col}${row}`
 
-  let maxLen = 0
   let best: ThreatInfo | null = null
+  const tactical = scoreTacticalMove(board, x, y, 2)
 
   board[y][x] = 2
   for (const { dx, dy } of DIRECTIONS) {
@@ -286,6 +473,10 @@ function describeMove(board: Board, x: number, y: number): string {
   board[y][x] = 0
 
   if (best?.type === 'five') return `${pos}: winning move`
+  if (tactical.category === 'blocking_win') return `${pos}: blocks immediate win`
+  if (tactical.category === 'forcing_attack') return `${pos}: creates double threat`
+  if (tactical.category === 'blocking_threat') return `${pos}: stops double threat`
+  if (tactical.category === 'broken_or_open_four') return `${pos}: creates four threat`
   if (best?.type === 'open_four') return `${pos}: creates open four`
   if (best?.type === 'four') return `${pos}: creates four`
   if (best?.type === 'open_three') return `${pos}: creates open three`

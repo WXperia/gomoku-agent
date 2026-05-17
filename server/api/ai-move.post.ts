@@ -1,7 +1,9 @@
 import { runGomokuAgent, type AIConfig, type ModelProvider } from '../utils/gomokuAgent'
+import { requireAuthenticatedGame } from '../utils/supabaseAuth'
 import { z } from 'zod'
 
 const RequestSchema = z.object({
+  gameId: z.number().int().positive(),
   board: z.array(z.array(z.number())).length(15),
   moves: z.array(z.object({ x: z.number(), y: z.number(), player: z.union([z.literal(1), z.literal(2)]) })),
   provider: z.enum(['openai', 'anthropic', 'deepseek', 'minimax']).default('anthropic'),
@@ -18,7 +20,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: `Invalid request: ${parsed.error.message}` })
   }
 
-  const { board, moves, provider, modelName } = parsed.data
+  const { gameId, board, moves, provider, modelName } = parsed.data
+  await requireAuthenticatedGame(event, gameId, 'gomoku')
+
   const config = useRuntimeConfig()
 
   type ProviderConfig = { keyField: string; urlField: string; envKey: string }

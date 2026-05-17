@@ -133,6 +133,7 @@ Example: {"x": 7, "y": 7, "reasoning": "Center control in the opening", "confide
 
 async function precomputeNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
   const analysis = analyzeBoard(state.board, state.moves)
+  const topCandidate = analysis.candidates[0]
 
   // Win in 1 — no need to ask the model
   if (analysis.criticalAttack) {
@@ -149,6 +150,16 @@ async function precomputeNode(state: AgentStateType): Promise<Partial<AgentState
       analysis,
       forcedMove: analysis.criticalDefense,
       thinkingSteps: [`[Force] Blocking opponent win: (${analysis.criticalDefense.x},${analysis.criticalDefense.y})`],
+    }
+  }
+
+  if (topCandidate && ['forcing_attack', 'blocking_threat', 'broken_or_open_four'].includes(topCandidate.category || '')) {
+    return {
+      analysis,
+      forcedMove: { x: topCandidate.x, y: topCandidate.y },
+      reasoning: topCandidate.reason,
+      confidence: 'high',
+      thinkingSteps: [`[Tactic] ${topCandidate.reason} (score=${Math.round(topCandidate.score)})`],
     }
   }
 
@@ -248,6 +259,18 @@ async function modelDecideNode(state: AgentStateType): Promise<Partial<AgentStat
         : (response.content as any[])[0]?.text ?? ''
 
       const { x, y, reasoning, taunt, confidence } = parseModelResponse(raw, board)
+      const allowed = analysis.candidates.slice(0, 10).some(c => c.x === x && c.y === y)
+      if (!allowed && analysis.candidates.length) {
+        const best = analysis.candidates[0]!
+        steps.push(`[Model attempt ${attempt}] Overridden: chose non-candidate (${x},${y}); using (${best.x},${best.y})`)
+        return {
+          modelMove: { x: best.x, y: best.y },
+          reasoning: `${best.reason}. Model suggested (${x},${y}), but evaluator preferred the stronger tactical candidate.`,
+          taunt,
+          confidence: 'high',
+          thinkingSteps: steps,
+        }
+      }
 
       steps.push(`[Model attempt ${attempt}] Chose (${x},${y}): ${reasoning.slice(0, 100)}`)
       return { modelMove: { x, y }, reasoning, taunt, confidence, thinkingSteps: steps }
@@ -376,6 +399,22 @@ export async function streamGomokuAgent(
     return
   }
 
+  const topCandidate = analysis.candidates[0]
+  if (topCandidate && ['forcing_attack', 'blocking_threat', 'broken_or_open_four'].includes(topCandidate.category || '')) {
+    const step = `[Tactic] ${topCandidate.reason} (score=${Math.round(topCandidate.score)})`
+    thinkingSteps.push(step)
+    emit({ type: 'step', text: step })
+    emit({
+      type: 'done',
+      move: { x: topCandidate.x, y: topCandidate.y },
+      reasoning: topCandidate.reason,
+      taunt: "That position is already doing the hard work for me.",
+      confidence: 'high',
+      thinkingSteps,
+    })
+    return
+  }
+
   const analyzeStep = `[Analyze] Phase=${analysis.phase}, threats=${analysis.threats.length}, candidates=${analysis.candidates.length}`
   thinkingSteps.push(analyzeStep)
   emit({ type: 'step', text: analyzeStep })
@@ -447,6 +486,22 @@ export async function streamGomokuAgent(
       emit({ type: 'step', text: stepLabel })
 
       const { x, y, reasoning, taunt, confidence } = parseModelResponse(fullText, board)
+      const allowed = analysis.candidates.slice(0, 10).some(c => c.x === x && c.y === y)
+      if (!allowed && analysis.candidates.length) {
+        const best = analysis.candidates[0]!
+        const overrideStep = `[Model attempt ${attempt}] Overridden: chose non-candidate (${x},${y}); using (${best.x},${best.y})`
+        thinkingSteps.push(overrideStep)
+        emit({ type: 'step', text: overrideStep })
+        emit({
+          type: 'done',
+          move: { x: best.x, y: best.y },
+          reasoning: `${best.reason}. Model suggested (${x},${y}), but evaluator preferred the stronger tactical candidate.`,
+          taunt,
+          confidence: 'high',
+          thinkingSteps,
+        })
+        return
+      }
       const doneStep = `[Model attempt ${attempt}] Chose (${x},${y}): ${reasoning.slice(0, 80)}`
       thinkingSteps.push(doneStep)
       emit({ type: 'step', text: doneStep })
