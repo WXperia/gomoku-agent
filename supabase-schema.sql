@@ -33,7 +33,7 @@ create table if not exists public.ai_stats (
 
 -- Pre-populate with all model IDs so upsert works cleanly
 insert into public.ai_stats (model_id) values
-  ('gpt55'), ('gpt4o'), ('claude-opus'), ('claude-sonnet'),
+  ('gpt55'), ('claude-opus'), ('claude-sonnet'),
   ('deepseek-pro'), ('deepseek-flash'), ('minimax'), ('local')
 on conflict do nothing;
 

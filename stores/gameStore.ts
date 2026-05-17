@@ -68,9 +68,8 @@ export const useGameStore = defineStore('game', {
     // AI Models
       aiModels: [
         { id: 'gpt55',         name: 'GPT-5.5',         provider: 'openai'    as const, modelName: 'gpt-5.5',             difficulty: 5, icon: '⚡', color: '#10a37f', wins: 0, games: 0 },
-        { id: 'gpt4o',         name: 'GPT-4o',          provider: 'openai'    as const, modelName: 'gpt-4o',              difficulty: 4, icon: '⚔', color: '#74aa9c', wins: 0, games: 0 },
-        { id: 'claude-opus',   name: 'Claude Opus',     provider: 'anthropic' as const, modelName: 'claude-opus-4-7',    difficulty: 5, icon: '🛡', color: '#9b59b6', wins: 0, games: 0 },
-        { id: 'claude-sonnet', name: 'Claude Sonnet',   provider: 'anthropic' as const, modelName: 'claude-sonnet-4-6',  difficulty: 4, icon: '◎', color: '#3498db', wins: 0, games: 0 },
+        { id: 'claude-opus',   name: 'Claude Opus 4.7', provider: 'anthropic' as const, modelName: 'claude-opus-4-7',    difficulty: 5, icon: '🛡', color: '#9b59b6', wins: 0, games: 0 },
+        { id: 'claude-sonnet', name: 'Claude Sonnet 4.6', provider: 'anthropic' as const, modelName: 'claude-sonnet-4-6',  difficulty: 4, icon: '◎', color: '#3498db', wins: 0, games: 0 },
         { id: 'deepseek-pro',  name: 'DeepSeek V4 Pro', provider: 'deepseek'  as const, modelName: 'deepseek-v4-pro',    difficulty: 5, icon: '🧠', color: '#e67e22', wins: 0, games: 0 },
         { id: 'deepseek-flash', name: 'DeepSeek V4 Flash', provider: 'deepseek' as const, modelName: 'deepseek-v4-flash', difficulty: 3, icon: '🔮', color: '#d35400', wins: 0, games: 0 },
         { id: 'minimax',       name: 'MiniMax M2.7',    provider: 'minimax'   as const, modelName: 'MiniMax-M2.7',       difficulty: 4, icon: '✦', color: '#8e44ad', wins: 0, games: 0 },
