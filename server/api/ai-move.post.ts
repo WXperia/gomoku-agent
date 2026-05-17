@@ -1,4 +1,5 @@
 import { runGomokuAgent, type AIConfig, type ModelProvider } from '../utils/gomokuAgent'
+import { createAIConfig } from '../utils/modelParams'
 import { requireAuthenticatedGame } from '../utils/supabaseAuth'
 import { z } from 'zod'
 
@@ -44,13 +45,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const aiConfig: AIConfig = {
-    provider: provider as ModelProvider,
-    apiKey,
-    baseUrl,
-    modelName,
-    ...(provider === 'anthropic' ? {} : { temperature: 0.1 }),
-  }
+  const aiConfig: AIConfig = createAIConfig({ provider: provider as ModelProvider, apiKey, baseUrl, modelName })
 
   try {
     const result = await runGomokuAgent({ board, moves, config: aiConfig })

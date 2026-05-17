@@ -1,4 +1,5 @@
 import { streamGomokuAgent, type AIConfig, type ModelProvider } from '../utils/gomokuAgent'
+import { createAIConfig } from '../utils/modelParams'
 import { requireAuthenticatedGame } from '../utils/supabaseAuth'
 import { z } from 'zod'
 
@@ -43,13 +44,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const aiConfig: AIConfig = {
-    provider: provider as ModelProvider,
-    apiKey,
-    baseUrl,
-    modelName,
-    ...(provider === 'anthropic' ? {} : { temperature: 0.1 }),
-  }
+  const aiConfig: AIConfig = createAIConfig({ provider: provider as ModelProvider, apiKey, baseUrl, modelName })
 
   setHeader(event, 'Content-Type', 'text/event-stream')
   setHeader(event, 'Cache-Control', 'no-cache')

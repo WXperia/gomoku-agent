@@ -66,7 +66,7 @@ export function createLLM(config: AIConfig) {
       model: config.modelName || 'gpt-4o',
       apiKey: config.apiKey,
       configuration: config.baseUrl ? { baseURL: config.baseUrl } : undefined,
-      temperature: config.temperature ?? 0.1,
+      ...(config.temperature == null ? {} : { temperature: config.temperature }),
     })
   } else {
     return new ChatAnthropic({
